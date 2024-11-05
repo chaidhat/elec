@@ -1,4 +1,5 @@
-# electric simulator/visualizer by chai
+# chai/elec
+An 3D electromagnetic simulator and visualizer
 
 # Install
 ```bash 
