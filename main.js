@@ -8,6 +8,7 @@ let camera, scene, renderer, controls, stats;
 
 let mesh;
 let oldMesh;
+let lines = [];
 const amount = parseInt(window.location.search.slice(1)) || 10;
 const count = Math.pow(amount, 3);
 
@@ -17,33 +18,39 @@ const mouse = new THREE.Vector2(1, 1);
 const color = new THREE.Color();
 
 const settings = {
-    simResMul: 2,
-    visRes: 20,
-    viewportX: 10,
-    viewportY: 10,
-    viewportZ: 10,
-    scale: true,
+    simRes: 1.5,
+    fieldRes: 10,
+    viewportXmin: -10,
+    viewportXmax: 10,
+    viewportYmin: -10,
+    viewportYmax: 10,
+    viewportZmin: -10,
+    viewportZmax: 10,
+    scale: false,
 };
 
 init();
 
 function f(x,y,z) {
-    x = (x - 5) * 2
-    y = (y - 5) * 2
-    z = (z - 5) * 2
-    if (x**2 + y**2 > 80) {
-        return 0
+    return hemisphere(x,y,z)
+}
+function coaxial(x,y,z) {
+    x = (z) * 2
+    y = (y) * 2
+    z = (x) * 2
+    if (80 < x**2 + y**2 && x**2 + y**2 < 100) {
+        return 1
     }
-    if (x**2 + y**2 < 50 && x**2 + y**2 > 20) {
-        return 0
+    if (x**2 + y**2 < 20) {
+        return -1
     }
-    if (x**2 + y**2 < 10) {
-        return 0
-    }
-    return ((x) * 0.5)**2 + ((y) * 0.5)**2 
+    return 0
 }
 
 function hemisphere(x,y,z) {
+    if (x > 0) {
+        return 0;
+    }
     if (x**2 + y**2 + z**2 > 100) {
         return 0
     }
@@ -56,7 +63,7 @@ function hemisphere(x,y,z) {
 
 function init() {
 
-    camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera = new THREE.OrthographicCamera(  window.innerWidth / -20,  window.innerWidth / 20,  window.innerHeight / 20,  window.innerHeight / - 20, 1, 1000 );
     camera.position.set(amount, amount, amount);
     camera.lookAt(0, 0, 0);
 
@@ -67,7 +74,9 @@ function init() {
     scene.add(light);
 
 
-    render()
+    const sim = simulate();
+    render(sim);
+    renderFieldLines(sim);
 
     // Rendering 3D axis
     const createAxisLine = (color, start, end) => {
@@ -84,12 +93,26 @@ function init() {
 
     const gui = new GUI();
 
-    gui.add( settings, 'simResMul', 0, 2, 1)
-        .onChange(() => render()); 
-    gui.add( settings, 'visRes', 0, 40, 10)
-        .onChange(() => render());
+    gui.add( settings, 'fieldRes', 0, 10, 1)
+        .onChange(() => {
+            const sim = simulate();
+            render(sim);
+        }); 
+    gui.add( settings, 'simRes', 0, 3)
+        .onChange(() => {
+            const sim = simulate();
+            render(sim);
+        }); 
     gui.add( settings, 'scale')
-        .onChange(() => render());
+        .onChange(() => {
+            const sim = simulate();
+            render(sim);
+        }); 
+    gui.add( settings, 'viewportXmin', -10, 1, 1)
+        .onChange(() => {
+            const sim = simulate();
+            render(sim);
+        }); 
 
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
@@ -107,32 +130,21 @@ function init() {
 
 }
 
-function render() {
-    const matrix = new THREE.Matrix4();
-    let geometry;
-    if (settings.scale) {
-        geometry = new THREE.IcosahedronGeometry(0.25, 3);
-    } else {
-        geometry = new THREE.BoxGeometry( 10 / settings.visRes, 10 / settings.visRes, 10 / settings.visRes);
-    }
-    const material = new THREE.MeshPhongMaterial({ color: 0x00ffffff });
-    mesh = new THREE.InstancedMesh(geometry, material, settings.visRes ** 3 - 1);
+function simulate() {
+    const physicalScale = 1 / settings.simRes;
 
-    let i = 0;
-    const offset = settings.viewportX / 2;
-
+    // simulate
     let sim = {}
     let fpMax = -9999999
     let fpMin = 9999999
-    const dsx = settings.viewportX / (settings.simResMul * settings.visRes)
-    const dsy = settings.viewportY / (settings.simResMul * settings.visRes)
-    const dsz = settings.viewportZ / (settings.simResMul * settings.visRes)
-    for (let x = 0; x < settings.viewportX ; x += dsx) {
-        for (let y = 0; y < settings.viewportY; y += dsy){
-            for (let z = 0; z < settings.viewportZ; z += dsz){
+    for (let x = settings.viewportXmin / physicalScale; x < settings.viewportXmax / physicalScale; x++) {
+        sim[x] = {}
+        for (let y = settings.viewportYmin / physicalScale; y < settings.viewportYmax / physicalScale; y++){
+            sim[x][y] = {}
+            for (let z = settings.viewportZmin / physicalScale; z < settings.viewportZmax / physicalScale; z++){
 
-                const fp = f(x,y,z);
-                sim[`${x} ${y} ${z}`] = fp;
+                const fp = f(x * physicalScale, y * physicalScale, z * physicalScale);
+                sim[x][y][z] = fp
                 if (fp > fpMax) {
                     fpMax = fp;
                 }
@@ -145,27 +157,50 @@ function render() {
     }
     const fpNormalizeOffset = -fpMin
     const fpNormalizeMultiplier = 1 / (fpMax - fpMin)
-    console.log(sim)
+    const metaSim = {
+        sim: sim,
+        fpNormalizeOffset: fpNormalizeOffset,
+        fpNormalizeMultiplier: fpNormalizeMultiplier
+    }
+    return metaSim;
+}
 
-    const dvx = settings.viewportX / settings.visRes
-    const dvy = settings.viewportY / settings.visRes
-    const dvz = settings.viewportZ / settings.visRes
-    for (let x = 0; x < settings.viewportX ; x += dvx) {
-        for (let y = 0; y < settings.viewportY; y += dvy){
-            for (let z = 0; z < settings.viewportZ; z += dvz){
+function render(metaSim) {
+    const sim = metaSim.sim;
+    const fpNormalizeOffset = metaSim.fpNormalizeOffset;
+    const fpNormalizeMultiplier = metaSim.fpNormalizeMultiplier;
 
-                console.log(`${x} ${y} ${z}`)
-                const fp = (sim[`${x} ${y} ${z}`] - fpNormalizeOffset) * fpNormalizeMultiplier;
-                if (fp === 0) {
+    const physicalScale = 1 / settings.simRes;
+
+    const matrix = new THREE.Matrix4();
+    let geometry;
+    if (settings.scale) {
+        geometry = new THREE.IcosahedronGeometry(0.5 * physicalScale, 2);
+    } else {
+        geometry = new THREE.BoxGeometry(1 * physicalScale, 1 * physicalScale, 1 * physicalScale);
+    }
+    const material = new THREE.MeshPhongMaterial({ color: 0x00ffffff });
+    mesh = new THREE.InstancedMesh(geometry, material, ((settings.viewportXmax *2) / physicalScale) ** 3);
+
+    let i = 0;
+
+
+    // visualize
+    for (let x = settings.viewportXmin / physicalScale; x < settings.viewportXmax / physicalScale; x++) {
+        for (let y = settings.viewportYmin / physicalScale; y < settings.viewportYmax / physicalScale; y++){
+            for (let z = settings.viewportZmin / physicalScale; z < settings.viewportZmax / physicalScale; z++){
+
+                const fp = (sim[x][y][z] - fpNormalizeOffset) * fpNormalizeMultiplier;
+                if (sim[x][y][z] === 0) {
                     continue;
                 }
                 if (settings.scale) {
                     matrix.scale(new THREE.Vector3(fp, fp, fp))
                 }
-                matrix.setPosition(x, y, z);
+                matrix.setPosition(x * physicalScale, y * physicalScale, z * physicalScale);
 
                 mesh.setMatrixAt(i, matrix);
-                mesh.setColorAt(i, new THREE.Color().setHSL(-fp, 0.8, 0.5));
+                mesh.setColorAt(i, new THREE.Color().setHSL(-fp, 0.8, 0.2));
                 if (settings.scale) {
                     matrix.scale(new THREE.Vector3(1/fp, 1/fp, 1/fp))
                 }
@@ -178,6 +213,89 @@ function render() {
     scene.remove(oldMesh)
     scene.add(mesh)
     oldMesh = mesh
+
+
+}
+
+function renderFieldLines(metaSim) {
+    const sim = metaSim.sim;
+
+    const physicalScale = 1 / settings.simRes;
+
+    for (let i = 0; i < lines.length; i++) {
+        scene.remove(lines.pop())
+    }
+    const dfx = 8
+    const dfy = 8
+    const dfz = 8
+
+    const dfMicro = 0.5
+
+    const fieldSize = 4;
+    const microThreshold = 5;
+
+    let r = 20
+    let x, y, z;
+    let isMicro = false;
+    for (x = settings.viewportXmin * fieldSize / physicalScale; x < settings.viewportXmax * fieldSize / physicalScale; x += dfx) {
+        for (y = settings.viewportYmin * fieldSize / physicalScale; y < settings.viewportYmax * fieldSize / physicalScale; y += dfy) {
+            for (z = settings.viewportZmin * fieldSize / physicalScale; z < settings.viewportZmax * fieldSize / physicalScale; z += dfz) {
+                const lineMaterial = new THREE.LineBasicMaterial( { color: 0xffffff } );
+
+                const points = drawLine(sim, x, y, z);
+
+                const lineGeometry = new THREE.BufferGeometry().setFromPoints( points );
+                const line = new THREE.Line( lineGeometry, lineMaterial );
+                scene.add( line );
+                lines.push(line)
+            }
+        }
+    }
+
+    for (y = -microThreshold / physicalScale; y < microThreshold / physicalScale; y += dfMicro) {
+        for (z = -microThreshold / physicalScale; z < microThreshold / physicalScale; z += dfMicro) {
+            const lineMaterial = new THREE.LineBasicMaterial( { color: 0xffffff } );
+
+            const points = drawLine(sim, 0, y, z);
+
+            const lineGeometry = new THREE.BufferGeometry().setFromPoints( points );
+            const line = new THREE.Line( lineGeometry, lineMaterial );
+            scene.add( line );
+            lines.push(line)
+        }
+    }
+}
+
+function drawLine(sim, x, y, z) {
+    const physicalScale = 1 / settings.simRes;
+    const k = 0.01
+
+    let Ex = 0;
+    let Ey = 0;
+    let Ez = 0;
+    for (let px = settings.viewportXmin / physicalScale; px < settings.viewportXmax / physicalScale; px++) {
+        for (let py = settings.viewportYmin / physicalScale; py < settings.viewportYmax / physicalScale; py++){
+            for (let pz = settings.viewportZmin / physicalScale; pz < settings.viewportZmax / physicalScale; pz++){
+                // E = (k*q) / r^2
+                const dx = (x - px) * physicalScale
+                const dy = (y - py) * physicalScale
+                const dz = (z - pz) * physicalScale
+                // q = sim[x][y][z]
+                const r = Math.sqrt(dx ** 2 + dy ** 2 + dz ** 2)
+                if (r !== 0) {
+                    const q = sim[px][py][pz]
+                    Ex += dx * k * q / (r**3)
+                    Ey += dy * k * q / (r**3)
+                    Ez += dz * k * q / (r**3)
+                }
+            }
+        }
+    }
+
+    const points = [];
+    points.push( new THREE.Vector3( x, y, z ) );
+    points.push( new THREE.Vector3( x - Ex, y - Ey, z - Ez) );
+    return points;
 }
 
 function onWindowResize() {
